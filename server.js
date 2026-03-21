@@ -168,3 +168,66 @@ server.listen(PORT, () => {
   console.log(`🚀 Isac Massuque Server · port ${PORT}`);
   console.log(`📡 Public chat + Private rooms ready`);
 });
+    });
+    return;
+  }
+
+  // ══ VISITOR ══
+  onlineVisitors++;
+  socket.join('private-' + sessionId);
+
+  if (!privateRooms.has(sessionId)) {
+    privateRooms.set(sessionId, {
+      name: 'Visitante',
+      messages: [{
+        id: msgId++,
+        sender: 'Isac Massuque',
+        text: 'Olá! 👋 Esta conversa é privada — só tu e eu a vemos. Tens dúvidas sobre Forex ou educação financeira?',
+        isAdmin: true,
+        time: new Date().toISOString()
+      }],
+      unread: 0
+    });
+  }
+
+  const room = privateRooms.get(sessionId);
+  socket.emit('public-history', publicMessages.slice(-40));
+  socket.emit('private-history', { sessionId, messages: room.messages });
+  io.to('admin-room').emit('visitor-count', onlineVisitors);
+  sendRoomList();
+  console.log(`👤 [${sessionId}] connected (${onlineVisitors} online)`);
+
+  // Visitante envia para sala pública
+  socket.on('public-msg-send', ({ name, text }) => {
+    if (name) room.name = name;
+    const msg = { id: msgId++, sender: name || 'Visitante', text, isAdmin: false, sessionId, time: new Date().toISOString() };
+    publicMessages.push(msg);
+    if (publicMessages.length > 300) publicMessages = publicMessages.slice(-150);
+    io.emit('public-msg', msg);
+    console.log(`💬 Public [${name}]: ${text}`);
+  });
+
+  // Visitante envia mensagem privada
+  socket.on('private-msg-send', ({ name, text }) => {
+    if (name) room.name = name;
+    const msg = { id: msgId++, sender: name || 'Visitante', text, isAdmin: false, time: new Date().toISOString() };
+    room.messages.push(msg);
+    room.unread++;
+    socket.emit('private-msg', msg);
+    io.to('admin-room').emit('new-private-msg', { sessionId, name: room.name, msg, unread: room.unread });
+    sendRoomList();
+    console.log(`🔒 Private [${room.name}]: ${text}`);
+  });
+
+  socket.on('disconnect', () => {
+    onlineVisitors = Math.max(0, onlineVisitors - 1);
+    io.to('admin-room').emit('visitor-count', onlineVisitors);
+    console.log(`👤 [${sessionId}] disconnected (${onlineVisitors} online)`);
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Isac Massuque Server · port ${PORT}`);
+  console.log(`📡 Public chat + Private rooms ready`);
+});
