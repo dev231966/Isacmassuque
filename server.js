@@ -62,11 +62,22 @@ io.on('connection', (socket) => {
     socket.join('admin-room');
     io.emit('admin-status', { online: true });
     socket.emit('public-history', publicMessages.slice(-60));
-    sendRoomList();
-    console.log('✅ Admin connected');
+    // Send room list directly to this admin socket (not broadcast)
+    const list = [];
+    privateRooms.forEach((room, sid) => {
+      list.push({ sessionId: sid, name: room.name, unread: room.unread, lastMsg: room.messages[room.messages.length - 1] });
+    });
+    list.sort((a, b) => (b.lastMsg?.time || '').localeCompare(a.lastMsg?.time || ''));
+    socket.emit('room-list', list);
+    console.log('✅ Admin connected — sent ' + list.length + ' rooms');
 
-    // Admin abre sala privada de um visitante
+    // Admin abre sala privada ou pública
     socket.on('admin-join-room', (sid) => {
+      if (sid === '__public__') {
+        // Send public chat history
+        socket.emit('public-history', publicMessages.slice(-60));
+        return;
+      }
       socket.join('private-' + sid);
       const room = privateRooms.get(sid);
       if (room) {
@@ -105,6 +116,75 @@ io.on('connection', (socket) => {
       adminConnected = false;
       io.emit('admin-status', { online: false });
       console.log('❌ Admin disconnected');
+    });
+    return;
+  }
+
+  // ══ VISITOR ══
+  onlineVisitors++;
+  socket.join('private-' + sessionId);
+
+  if (!privateRooms.has(sessionId)) {
+    privateRooms.set(sessionId, {
+      name: 'Visitante',
+      messages: [{
+        id: msgId++,
+        sender: 'Isac Massuque',
+        text: 'Olá! 👋 Esta conversa é privada — só tu e eu a vemos. Tens dúvidas sobre Forex ou educação financeira?',
+        isAdmin: true,
+        time: new Date().toISOString()
+      }],
+      unread: 0
+    });
+  }
+
+  const room = privateRooms.get(sessionId);
+  socket.emit('public-history', publicMessages.slice(-40));
+  socket.emit('private-history', { sessionId, messages: room.messages });
+  io.to('admin-room').emit('visitor-count', onlineVisitors);
+  // Notify admin of new visitor immediately
+  const newList = [];
+  privateRooms.forEach((r, sid) => {
+    newList.push({ sessionId: sid, name: r.name, unread: r.unread, lastMsg: r.messages[r.messages.length - 1] });
+  });
+  newList.sort((a, b) => (b.lastMsg?.time || '').localeCompare(a.lastMsg?.time || ''));
+  io.to('admin-room').emit('room-list', newList);
+  console.log(`👤 [${sessionId}] connected (${onlineVisitors} online)`);
+
+  // Visitante envia para sala pública
+  socket.on('public-msg-send', ({ name, text }) => {
+    if (name) room.name = name;
+    const msg = { id: msgId++, sender: name || 'Visitante', text, isAdmin: false, sessionId, time: new Date().toISOString() };
+    publicMessages.push(msg);
+    if (publicMessages.length > 300) publicMessages = publicMessages.slice(-150);
+    io.emit('public-msg', msg);
+    console.log(`💬 Public [${name}]: ${text}`);
+  });
+
+  // Visitante envia mensagem privada
+  socket.on('private-msg-send', ({ name, text }) => {
+    if (name) room.name = name;
+    const msg = { id: msgId++, sender: name || 'Visitante', text, isAdmin: false, time: new Date().toISOString() };
+    room.messages.push(msg);
+    room.unread++;
+    socket.emit('private-msg', msg);
+    io.to('admin-room').emit('new-private-msg', { sessionId, name: room.name, msg, unread: room.unread });
+    sendRoomList();
+    console.log(`🔒 Private [${room.name}]: ${text}`);
+  });
+
+  socket.on('disconnect', () => {
+    onlineVisitors = Math.max(0, onlineVisitors - 1);
+    io.to('admin-room').emit('visitor-count', onlineVisitors);
+    console.log(`👤 [${sessionId}] disconnected (${onlineVisitors} online)`);
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Isac Massuque Server · port ${PORT}`);
+  console.log(`📡 Public chat + Private rooms ready`);
+});
     });
     return;
   }
